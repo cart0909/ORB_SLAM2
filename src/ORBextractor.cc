@@ -61,7 +61,7 @@
 #include <vector>
 
 #include "ORBextractor.h"
-
+#include "tracer.h"
 
 using namespace cv;
 using namespace std;
@@ -764,6 +764,7 @@ vector<cv::KeyPoint> ORBextractor::DistributeOctTree(const vector<cv::KeyPoint>&
 
 void ORBextractor::ComputeKeyPointsOctTree(vector<vector<KeyPoint> >& allKeypoints)
 {
+    ScopedTrace st("OctTree");
     allKeypoints.resize(nlevels);
 
     const float W = 30;
@@ -1083,11 +1084,14 @@ void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPo
 
         // preprocess the resized image
         Mat workingMat = mvImagePyramid[level].clone();
+        Tracer::TraceBegin("Gaussian");
         GaussianBlur(workingMat, workingMat, Size(7, 7), 2, 2, BORDER_REFLECT_101);
-
+        Tracer::TraceEnd();
         // Compute the descriptors
         Mat desc = descriptors.rowRange(offset, offset + nkeypointsLevel);
+        Tracer::TraceBegin("orb");
         computeDescriptors(workingMat, keypoints, desc, pattern);
+        Tracer::TraceEnd();
 
         offset += nkeypointsLevel;
 
@@ -1106,6 +1110,7 @@ void ORBextractor::operator()( InputArray _image, InputArray _mask, vector<KeyPo
 
 void ORBextractor::ComputePyramid(cv::Mat image)
 {
+    ScopedTrace st("Pyramid");
     for (int level = 0; level < nlevels; ++level)
     {
         float scale = mvInvScaleFactor[level];

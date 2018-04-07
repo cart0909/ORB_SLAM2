@@ -81,6 +81,7 @@ void LoopClosing::Run()
         if(CheckFinish())
             break;
 
+
         usleep(5000);
     }
 

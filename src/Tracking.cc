@@ -37,6 +37,7 @@
 
 #include<mutex>
 
+#include "tracer.h"
 
 using namespace std;
 
@@ -266,6 +267,8 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
 
 void Tracking::Track()
 {
+    ScopedTrace st("Track");
+
     if(mState==NO_IMAGES_YET)
     {
         mState = NOT_INITIALIZED;
@@ -508,6 +511,7 @@ void Tracking::Track()
 
 void Tracking::StereoInitialization()
 {
+    ScopedTrace st("InitMap");
     if(mCurrentFrame.N>500)
     {
         // Set Frame pose to the origin
@@ -738,6 +742,7 @@ void Tracking::CreateInitialMapMonocular()
 
 void Tracking::CheckReplacedInLastFrame()
 {
+    ScopedTrace st("CheckReplaced");
     for(int i =0; i<mLastFrame.N; i++)
     {
         MapPoint* pMP = mLastFrame.mvpMapPoints[i];
@@ -756,6 +761,7 @@ void Tracking::CheckReplacedInLastFrame()
 
 bool Tracking::TrackReferenceKeyFrame()
 {
+    ScopedTrace st("TrackRef");
     // Compute Bag of Words vector
     mCurrentFrame.ComputeBoW();
 
@@ -866,6 +872,7 @@ void Tracking::UpdateLastFrame()
 
 bool Tracking::TrackWithMotionModel()
 {
+    ScopedTrace st("TrackMotion");
     ORBmatcher matcher(0.9,true);
 
     // Update last frame pose according to its reference keyframe
@@ -929,6 +936,7 @@ bool Tracking::TrackWithMotionModel()
 
 bool Tracking::TrackLocalMap()
 {
+    ScopedTrace st("TrackLocal");
     // We have an estimation of the camera pose and some map points tracked in the frame.
     // We retrieve the local map and try to find matches to points in the local map.
 
@@ -976,6 +984,7 @@ bool Tracking::TrackLocalMap()
 
 bool Tracking::NeedNewKeyFrame()
 {
+    ScopedTrace st("CheckNeedKF");
     if(mbOnlyTracking)
         return false;
 
@@ -1062,6 +1071,7 @@ bool Tracking::NeedNewKeyFrame()
 
 void Tracking::CreateNewKeyFrame()
 {
+    ScopedTrace st("NewKF");
     if(!mpLocalMapper->SetNotStop(true))
         return;
 
@@ -1142,6 +1152,7 @@ void Tracking::CreateNewKeyFrame()
 
 void Tracking::SearchLocalPoints()
 {
+    ScopedTrace st("SearchLocalPts");
     // Do not search map points already matched
     for(vector<MapPoint*>::iterator vit=mCurrentFrame.mvpMapPoints.begin(), vend=mCurrentFrame.mvpMapPoints.end(); vit!=vend; vit++)
     {
@@ -1163,6 +1174,7 @@ void Tracking::SearchLocalPoints()
 
     int nToMatch=0;
 
+    Tracer::TraceBegin("InFrustum");
     // Project points in frame and check its visibility
     for(vector<MapPoint*>::iterator vit=mvpLocalMapPoints.begin(), vend=mvpLocalMapPoints.end(); vit!=vend; vit++)
     {
@@ -1178,6 +1190,7 @@ void Tracking::SearchLocalPoints()
             nToMatch++;
         }
     }
+    Tracer::TraceEnd();
 
     if(nToMatch>0)
     {
@@ -1194,6 +1207,7 @@ void Tracking::SearchLocalPoints()
 
 void Tracking::UpdateLocalMap()
 {
+    ScopedTrace st("UpdateLocalMap");
     // This is for visualization
     mpMap->SetReferenceMapPoints(mvpLocalMapPoints);
 
@@ -1340,6 +1354,7 @@ void Tracking::UpdateLocalKeyFrames()
 
 bool Tracking::Relocalization()
 {
+    ScopedTrace st("Reloc");
     // Compute Bag of Words Vector
     mCurrentFrame.ComputeBoW();
 

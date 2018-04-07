@@ -167,6 +167,7 @@ void Tracking::SetViewer(Viewer *pViewer)
 
 cv::Mat Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat &imRectRight, const double &timestamp)
 {
+    ScopedTrace st("Track");
     mImGray = imRectLeft;
     cv::Mat imGrayRight = imRectRight;
 
@@ -267,8 +268,6 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
 
 void Tracking::Track()
 {
-    ScopedTrace st("Track");
-
     if(mState==NO_IMAGES_YET)
     {
         mState = NOT_INITIALIZED;

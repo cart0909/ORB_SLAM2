@@ -39,6 +39,10 @@
 
 #include "tracer.h"
 
+#include <Eigen/Dense>
+#include <mutex>
+#include "orb_global.h"
+
 using namespace std;
 
 namespace ORB_SLAM2
@@ -1172,23 +1176,43 @@ void Tracking::SearchLocalPoints()
     }
 
     int nToMatch=0;
+    auto CheckInFrustumFoo = [&](int begin, int end) {
+        int num_to_match = 0;
+        // Project points in frame and check its visibility
+        for(int i = begin; i < end; ++i)
+        {
+            if(i >= mvpLocalMapPoints.size())
+                break;
+            MapPoint* pMP = mvpLocalMapPoints[i];
+            if(pMP->mnLastFrameSeen == mCurrentFrame.mnId)
+                continue;
+            if(pMP->isBad())
+                continue;
+            // Project (this fills MapPoint variables for matching)
+            if(mCurrentFrame.isInFrustum(pMP,0.5))
+            {
+                pMP->IncreaseVisible();
+                num_to_match++;
+            }
+        }
+        return num_to_match;
+    };
 
     Tracer::TraceBegin("InFrustum");
-    // Project points in frame and check its visibility
-    for(vector<MapPoint*>::iterator vit=mvpLocalMapPoints.begin(), vend=mvpLocalMapPoints.end(); vit!=vend; vit++)
-    {
-        MapPoint* pMP = *vit;
-        if(pMP->mnLastFrameSeen == mCurrentFrame.mnId)
-            continue;
-        if(pMP->isBad())
-            continue;
-        // Project (this fills MapPoint variables for matching)
-        if(mCurrentFrame.isInFrustum(pMP,0.5))
-        {
-            pMP->IncreaseVisible();
-            nToMatch++;
-        }
-    }
+    int num_works_each_thread = mvpLocalMapPoints.size() / (thread_pool_size_ + 1);
+    std::vector<std::future<int>> waits;
+    waits.emplace_back(thread_pool_->enqueue([&]{
+        return CheckInFrustumFoo(0, num_works_each_thread);
+    }));
+    waits.emplace_back(thread_pool_->enqueue([&]{
+        return CheckInFrustumFoo(num_works_each_thread, 2*num_works_each_thread);
+    }));
+
+    nToMatch = CheckInFrustumFoo(2*num_works_each_thread, mvpLocalMapPoints.size());
+
+    for(auto& it : waits)
+        nToMatch += it.get();
+
     Tracer::TraceEnd();
 
     if(nToMatch>0)

@@ -25,6 +25,9 @@
 #include "tracer.h"
 #include "orb_global.h"
 
+#include <Eigen/Dense>
+#include <opencv2/core/eigen.hpp>
+
 namespace ORB_SLAM2 {
 
 long unsigned int Frame::nNextId = 0;
@@ -289,22 +292,31 @@ bool Frame::isInFrustum(MapPoint *pMP, float viewingCosLimit) {
     pMP->mbTrackInView = false;
 
     // 3D in absolute coordinates
-    cv::Mat P = pMP->GetWorldPos();
+    //cv::Mat P = pMP->GetWorldPos();
+    Eigen::Matrix<float, 3, 1> P;
+    cv::cv2eigen(pMP->GetWorldPos(), P);
 
     // 3D in camera coordinates
-    const cv::Mat Pc = mRcw * P + mtcw;
-    const float &PcX = Pc.at<float>(0);
-    const float &PcY = Pc.at<float>(1);
-    const float &PcZ = Pc.at<float>(2);
+    Eigen::Matrix<float, 3, 3> Rcw;
+    Eigen::Matrix<float, 3, 1> tcw;
+    cv::cv2eigen(mRcw, Rcw);
+    cv::cv2eigen(mtcw, tcw);
+    Eigen::Matrix<float, 3, 1> Pc = Rcw * P + tcw;
+
+    const float &PcZ = Pc(2);
 
     // Check positive depth
     if (PcZ < 0.0f)
         return false;
 
+    Eigen::Map<Eigen::Matrix<float, 3, 3, Eigen::RowMajor>> K(mK.ptr<float>());
+    Eigen::Matrix<float, 3, 1> x2Dc_h = K * Pc;
+    x2Dc_h /= x2Dc_h(2);
+
     // Project in image and check it is not outside
     const float invz = 1.0f / PcZ;
-    const float u = fx * PcX * invz + cx;
-    const float v = fy * PcY * invz + cy;
+    const float& u = x2Dc_h(0);
+    const float& v = x2Dc_h(1);
 
     if (u < mnMinX || u > mnMaxX)
         return false;
@@ -314,14 +326,17 @@ bool Frame::isInFrustum(MapPoint *pMP, float viewingCosLimit) {
     // Check distance is in the scale invariance region of the MapPoint
     const float maxDistance = pMP->GetMaxDistanceInvariance();
     const float minDistance = pMP->GetMinDistanceInvariance();
-    const cv::Mat PO = P - mOw;
-    const float dist = cv::norm(PO);
+    Eigen::Map<Eigen::Matrix<float, 3, 1>> Ow(mOw.ptr<float>());
+    Eigen::Matrix<float, 3, 1> PO = P - Ow;
+    const float dist = PO.norm();
 
     if (dist < minDistance || dist > maxDistance)
         return false;
 
     // Check viewing angle
-    cv::Mat Pn = pMP->GetNormal();
+    // cv::Mat Pn = pMP->GetNormal();
+    Eigen::Matrix<float, 3, 1> Pn;
+    cv::cv2eigen(pMP->GetNormal(), Pn);
 
     const float viewCos = PO.dot(Pn) / dist;
 

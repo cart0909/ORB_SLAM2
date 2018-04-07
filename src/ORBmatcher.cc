@@ -32,6 +32,8 @@
 #include "tracer.h"
 #include <Eigen/Dense>
 #include <opencv2/core/eigen.hpp>
+#include <mutex>
+#include "orb_global.h"
 
 using namespace std;
 
@@ -1280,103 +1282,124 @@ int ORBmatcher::SearchByProjection(Frame &CurrentFrame, const Frame &LastFrame,
     const bool bForward = tlc(2) > CurrentFrame.mb && !bMono;
     const bool bBackward = -tlc(2) > CurrentFrame.mb && !bMono;
 
-    Eigen::Matrix<float, 3, 3> K;
-    K << CurrentFrame.fx, 0, CurrentFrame.cx, 0, CurrentFrame.fy, CurrentFrame.cy, 0, 0, 1;
+    Eigen::Map<Eigen::Matrix<float, 3, 3, Eigen::RowMajor>> K(CurrentFrame.mK.ptr<float>());
 
-    for (int i = 0; i < LastFrame.N; i++) {
-        MapPoint* pMP = LastFrame.mvpMapPoints[i];
+    std::mutex data_mutex;
 
-        if (pMP) {
-            if (!LastFrame.mvbOutlier[i]) {
-                // Project
-                Eigen::Matrix<float, 3, 1> x3Dw;
-                cv::cv2eigen(pMP->GetWorldPos(), x3Dw);
-                Eigen::Matrix<float, 3, 1> x3Dc = Rcw * x3Dw + tcw;
+    auto MatchesFoo = [&](int begin, int end) {
+        for (int i = begin; i < end; i++) {
+            if(i >= LastFrame.N)
+            break;
 
-                const float& invzc = x3Dc(2);
+            MapPoint* pMP = LastFrame.mvpMapPoints[i];
 
-                if (invzc < 0)
+            if (pMP) {
+                if (!LastFrame.mvbOutlier[i]) {
+                    // Project
+            Eigen::Matrix<float, 3, 1> x3Dw;
+            cv::cv2eigen(pMP->GetWorldPos(), x3Dw);
+            Eigen::Matrix<float, 3, 1> x3Dc = Rcw * x3Dw + tcw;
+
+            const float& invzc = x3Dc(2);
+
+            if (invzc < 0)
+            continue;
+
+            Eigen::Matrix<float, 3, 1> x2Dc_h = K * x3Dc;
+            x2Dc_h /= x2Dc_h(2);
+
+            const float& u = x2Dc_h(0);
+            const float& v = x2Dc_h(1);
+
+            if (u < CurrentFrame.mnMinX || u > CurrentFrame.mnMaxX)
+            continue;
+            if (v < CurrentFrame.mnMinY || v > CurrentFrame.mnMaxY)
+            continue;
+
+            int nLastOctave = LastFrame.mvKeys[i].octave;
+
+            // Search in a window. Size depends on scale
+            float radius = th * CurrentFrame.mvScaleFactors[nLastOctave];
+
+            vector<size_t> vIndices2;
+
+            if (bForward)
+            vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius,
+                    nLastOctave);
+            else if (bBackward)
+            vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius, 0,
+                    nLastOctave);
+            else
+            vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius,
+                    nLastOctave - 1, nLastOctave + 1);
+
+            if (vIndices2.empty())
+            continue;
+
+            const cv::Mat dMP = pMP->GetDescriptor();
+
+            int bestDist = 256;
+            int bestIdx2 = -1;
+
+            for (vector<size_t>::const_iterator vit = vIndices2.begin(),
+                    vend = vIndices2.end(); vit != vend; vit++) {
+                const size_t i2 = *vit;
+                if (CurrentFrame.mvpMapPoints[i2])
+                if (CurrentFrame.mvpMapPoints[i2]->Observations() > 0)
+                continue;
+
+                if (CurrentFrame.mvuRight[i2] > 0) {
+                    const float ur = u - CurrentFrame.mbf * invzc;
+                    const float er = fabs(ur - CurrentFrame.mvuRight[i2]);
+                    if (er > radius)
                     continue;
-
-                Eigen::Matrix<float, 3, 1> x2Dc_h = K * x3Dc;
-                x2Dc_h /= x2Dc_h(2);
-
-                const float& u = x2Dc_h(0);
-                const float& v = x2Dc_h(1);
-
-                if (u < CurrentFrame.mnMinX || u > CurrentFrame.mnMaxX)
-                    continue;
-                if (v < CurrentFrame.mnMinY || v > CurrentFrame.mnMaxY)
-                    continue;
-
-                int nLastOctave = LastFrame.mvKeys[i].octave;
-
-                // Search in a window. Size depends on scale
-                float radius = th * CurrentFrame.mvScaleFactors[nLastOctave];
-
-                vector<size_t> vIndices2;
-
-                if (bForward)
-                    vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius,
-                            nLastOctave);
-                else if (bBackward)
-                    vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius, 0,
-                            nLastOctave);
-                else
-                    vIndices2 = CurrentFrame.GetFeaturesInArea(u, v, radius,
-                            nLastOctave - 1, nLastOctave + 1);
-
-                if (vIndices2.empty())
-                    continue;
-
-                const cv::Mat dMP = pMP->GetDescriptor();
-
-                int bestDist = 256;
-                int bestIdx2 = -1;
-
-                for (vector<size_t>::const_iterator vit = vIndices2.begin(),
-                        vend = vIndices2.end(); vit != vend; vit++) {
-                    const size_t i2 = *vit;
-                    if (CurrentFrame.mvpMapPoints[i2])
-                        if (CurrentFrame.mvpMapPoints[i2]->Observations() > 0)
-                            continue;
-
-                    if (CurrentFrame.mvuRight[i2] > 0) {
-                        const float ur = u - CurrentFrame.mbf * invzc;
-                        const float er = fabs(ur - CurrentFrame.mvuRight[i2]);
-                        if (er > radius)
-                            continue;
-                    }
-
-                    const cv::Mat &d = CurrentFrame.mDescriptors.row(i2);
-
-                    const int dist = DescriptorDistance(dMP, d);
-
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestIdx2 = i2;
-                    }
                 }
 
-                if (bestDist <= TH_HIGH) {
-                    CurrentFrame.mvpMapPoints[bestIdx2] = pMP;
-                    nmatches++;
+                const cv::Mat &d = CurrentFrame.mDescriptors.row(i2);
 
-                    if (mbCheckOrientation) {
-                        float rot = LastFrame.mvKeysUn[i].angle
-                                - CurrentFrame.mvKeysUn[bestIdx2].angle;
-                        if (rot < 0.0)
-                            rot += 360.0f;
-                        int bin = round(rot * factor);
-                        if (bin == HISTO_LENGTH)
-                            bin = 0;
-                        assert(bin >= 0 && bin < HISTO_LENGTH);
-                        rotHist[bin].push_back(bestIdx2);
-                    }
+                const int dist = DescriptorDistance(dMP, d);
+
+                if (dist < bestDist) {
+                    bestDist = dist;
+                    bestIdx2 = i2;
+                }
+            }
+
+            if (bestDist <= TH_HIGH) {
+                CurrentFrame.mvpMapPoints[bestIdx2] = pMP;
+                nmatches++;
+
+                if (mbCheckOrientation) {
+                    float rot = LastFrame.mvKeysUn[i].angle
+                    - CurrentFrame.mvKeysUn[bestIdx2].angle;
+                    if (rot < 0.0)
+                    rot += 360.0f;
+                    int bin = round(rot * factor);
+                    if (bin == HISTO_LENGTH)
+                    bin = 0;
+                    assert(bin >= 0 && bin < HISTO_LENGTH);
+                    std::unique_lock<std::mutex> lock(data_mutex);
+                    rotHist[bin].push_back(bestIdx2);
                 }
             }
         }
     }
+}
+}   ;
+
+    int num_works_each_thread = LastFrame.N / (thread_pool_size_ + 1);
+    std::vector<std::future<void>> waits;
+    waits.emplace_back(thread_pool_->enqueue([&] {
+        MatchesFoo(0, num_works_each_thread);
+    }));
+    waits.emplace_back(thread_pool_->enqueue([&] {
+        MatchesFoo(num_works_each_thread, 2*num_works_each_thread);
+    }));
+
+    MatchesFoo(2 * num_works_each_thread, LastFrame.N);
+
+    for (auto& it : waits)
+        it.get();
 
     //Apply rotation consistency
     if (mbCheckOrientation) {

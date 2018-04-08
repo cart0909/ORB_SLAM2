@@ -25,9 +25,11 @@
 #include<iomanip>
 #include<chrono>
 
-#include<opencv2/core/core.hpp>
+#include <opencv2/core/core.hpp>
+#include <opencv2/core/ocl.hpp>
 
 #include<System.h>
+#include "tracer.h"
 
 using namespace std;
 
@@ -41,6 +43,33 @@ int main(int argc, char **argv)
         cerr << endl << "Usage: ./stereo_euroc path_to_vocabulary path_to_settings path_to_left_folder path_to_right_folder path_to_times_file" << endl;
         return 1;
     }
+
+    if (!cv::ocl::haveOpenCL())
+    {
+        cout << "OpenCL is not avaiable..." << endl;
+        return -1;
+    }
+    cv::ocl::Context context;
+    if (!context.create(cv::ocl::Device::TYPE_GPU))
+    {
+        cout << "Failed creating the context..." << endl;
+        return -1;
+    }
+
+    // In OpenCV 3.0.0 beta, only a single device is detected.
+    cout << context.ndevices() << " GPU devices are detected." << endl;
+    for (int i = 0; i < context.ndevices(); i++)
+    {
+        cv::ocl::Device device = context.device(i);
+        cout << "name                 : " << device.name() << endl;
+        cout << "available            : " << device.available() << endl;
+        cout << "imageSupport         : " << device.imageSupport() << endl;
+        cout << "OpenCL_C_Version     : " << device.OpenCL_C_Version() << endl;
+        cout << endl;
+    }
+
+    // Select the first device
+    cv::ocl::Device(context.device(0));
 
     // Retrieve paths to images
     vector<string> vstrImageLeft;
@@ -97,6 +126,11 @@ int main(int argc, char **argv)
     cv::initUndistortRectifyMap(K_l,D_l,R_l,P_l.rowRange(0,3).colRange(0,3),cv::Size(cols_l,rows_l),CV_32F,M1l,M2l);
     cv::initUndistortRectifyMap(K_r,D_r,R_r,P_r.rowRange(0,3).colRange(0,3),cv::Size(cols_r,rows_r),CV_32F,M1r,M2r);
 
+    cv::UMat gpu_M1l, gpu_M2l, gpu_M1r, gpu_M2r;
+    M1l.copyTo(gpu_M1l);
+    M2l.copyTo(gpu_M2l);
+    M1r.copyTo(gpu_M1r);
+    M2r.copyTo(gpu_M2r);
 
     const int nImages = vstrImageLeft.size();
 
@@ -133,8 +167,21 @@ int main(int argc, char **argv)
             return 1;
         }
 
-        cv::remap(imLeft,imLeftRect,M1l,M2l,cv::INTER_LINEAR);
-        cv::remap(imRight,imRightRect,M1r,M2r,cv::INTER_LINEAR);
+        cv::UMat gpu_imLeft, gpu_imRight, gpu_imLeftRect, gpu_imRightRect;
+        Tracer::TraceBegin("clone2gpu");
+        imLeft.copyTo(gpu_imLeft);
+        imRight.copyTo(gpu_imRight);
+        Tracer::TraceEnd();
+
+        Tracer::TraceBegin("remap");
+        cv::remap(gpu_imLeft,gpu_imLeftRect,gpu_M1l,gpu_M2l,cv::INTER_LINEAR);
+        cv::remap(gpu_imRight,gpu_imRightRect,gpu_M1r,gpu_M2r,cv::INTER_LINEAR);
+        Tracer::TraceEnd();
+
+        Tracer::TraceBegin("store2cpu");
+        gpu_imLeftRect.copyTo(imLeftRect);
+        gpu_imRightRect.copyTo(imRightRect);
+        Tracer::TraceEnd();
 
         double tframe = vTimeStamp[ni];
 
